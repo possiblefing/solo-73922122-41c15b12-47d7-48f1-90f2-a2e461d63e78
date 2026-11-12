@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>并发密码猜测限制 · 登录演示</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #273449; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --ok: #4ade80;
+    --warn: #fbbf24; --err: #f87171; --violet: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .span-4 { grid-column: span 4; } .span-6 { grid-column: span 6; }
+  .span-8 { grid-column: span 8; } .span-12 { grid-column: span 12; }
+  @media (max-width: 900px) {
+    .span-4, .span-6, .span-8 { grid-column: span 12; }
+  }
+  h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  h2 .tag { font-weight: 400; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  }
+  input:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  button {
+    border: 0; border-radius: 8px; padding: 9px 14px; font-size: 14px;
+    cursor: pointer; font-weight: 600;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: #082f49; }
+  .btn-ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .btn-danger { background: #7f1d1d; color: #fecaca; }
+  .btn-row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; }
+  .pill.ok { background: rgba(74,222,128,.15); color: var(--ok); }
+  .pill.err { background: rgba(248,113,113,.15); color: var(--err); }
+  .pill.warn { background: rgba(251,191,36,.15); color: var(--warn); }
+  .pill.run { background: rgba(56,189,248,.15); color: var(--accent); }
+  .pill.violet { background: rgba(167,139,250,.15); color: var(--violet); }
+  .muted { color: var(--muted); font-size: 12px; }
+  code { background: var(--panel2); padding: 1px 6px; border-radius: 6px; font-size: 12px; }
+  .result {
+    margin-top: 12px; border-radius: 8px; padding: 10px 12px; font-size: 13px;
+    background: var(--panel2); border: 1px solid var(--line); white-space: pre-wrap;
+    max-height: 220px; overflow: auto;
+  }
+  .req-list { max-height: 340px; overflow: auto; margin-top: 8px; }
+  .req-row { display: grid; grid-template-columns: 42px 90px 1fr 96px 110px; gap: 8px;
+    align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+  .req-row.head { color: var(--muted); font-size: 11.5px; }
+  .bar { height: 6px; border-radius: 999px; background: var(--panel2); overflow: hidden; margin-top: 4px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .hint { background: rgba(56,189,248,.08); border: 1px solid rgba(56,189,248,.35);
+    border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+  .hint ol { margin: 6px 0 0 18px; padding: 0; }
+  .hint li { margin: 4px 0; }
+  .creds { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .creds code { cursor: pointer; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.live { background: var(--ok); } .dot.stale { background: var(--err); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>并发密码猜测限制 · 登录演示</h1>
+  <p class="sub">
+    每账号 60 秒窗口内「已完成错误 + 在途核验」合计上限 5；核验前原子占位，满额立即 429 且不做哈希。
+    两个 Web 进程共享同一 SQLite（WAL），argon2 核验不持写锁、无全局串行锁；客户端断连后核验与结算仍会完成。
+  </p>
+
+  <div class="grid">
+    <!-- 当前身份 -->
+    <section class="card span-4">
+      <h2>当前身份 <span class="tag">HttpOnly Cookie</span></h2>
+      <div id="identity"><span class="muted">加载中…</span></div>
+      <div class="btn-row">
+        <button class="btn-ghost" id="btn-me">刷新身份</button>
+        <button class="btn-ghost" id="btn-logout">退出登录</button>
+      </div>
+    </section>
+
+    <!-- 名额状态 -->
+    <section class="card span-8">
+      <h2>各账号剩余名额
+        <span class="tag" id="poll-state"><span class="dot live"></span>1s 自动刷新</span>
+      </h2>
+      <table>
+        <thead><tr>
+          <th>账号</th><th>窗口内错误</th><th>在途核验</th><th>已用 / 上限</th><th>剩余名额</th>
+        </tr></thead>
+        <tbody id="stats-body"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+      </table>
+      <p class="muted" style="margin-bottom:0">
+        窗口时长 <b id="window-label">60</b> 秒，错误按「核验完成时刻」计数；服务重启保留窗口内错误、清空在途占位。
+      </p>
+    </section>
+
+    <!-- 单次登录 -->
+    <section class="card span-6">
+      <h2>单次登录</h2>
+      <p class="muted" style="margin-top:0">预置账号（点击可填充）：</p>
+      <div class="creds">
+        <code data-u="alice" data-p="alice-pass-2026">alice / alice-pass-2026</code>
+        <code data-u="bob" data-p="bob-pass-2026">bob / bob-pass-2026</code>
+      </div>
+      <label>用户名</label>
+      <input id="login-user" value="alice" autocomplete="username" />
+      <label>密码</label>
+      <input id="login-pass" type="password" value="alice-pass-2026" autocomplete="current-password" />
+      <label>核验延迟（秒，用于演示交错完成，最大 <span id="max-delay">10</span>s）</label>
+      <input id="login-delay" type="number" min="0" max="10" step="0.5" value="0" />
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-login">发起登录</button>
+      </div>
+      <div class="result" id="login-result" hidden></div>
+    </section>
+
+    <!-- 并发风暴 -->
+    <section class="card span-6">
+      <h2>并发请求 / 中途断开 <span class="tag">AbortController</span></h2>
+      <div class="row3">
+        <div>
+          <label>账号</label>
+          <select id="burst-user"><option>alice</option><option>bob</option></select>
+        </div>
+        <div>
+          <label>并发数</label>
+          <input id="burst-count" type="number" min="1" max="20" value="6" />
+        </div>
+        <div>
+          <label>每个延迟(s)</label>
+          <input id="burst-delay" type="number" min="0" max="10" step="0.5" value="4" />
+        </div>
+      </div>
+      <label>密码（默认错误密码，用于消耗名额）</label>
+      <input id="burst-pass" type="text" value="wrong-guess" />
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-burst">并发发起</button>
+        <button class="btn-danger" id="btn-abort-all" disabled>全部断开</button>
+        <button class="btn-ghost" id="btn-clear">清空列表</button>
+      </div>
+      <div class="req-list" id="burst-list">
+        <div class="req-row head"><span>#</span><span>状态</span><span>时间线 / 结果</span><span>耗时</span><span>处理进程</span></div>
+      </div>
+    </section>
+
+    <!-- 演示说明 -->
+    <section class="card span-12">
+      <h2>建议演示步骤</h2>
+      <div class="hint">
+        <ol>
+          <li>对 <code>alice</code> 并发发起 <b>6</b> 个错误密码、延迟 4s：前 5 个原子占位进入在途，第 6 个立即收到 <b>429</b>（响应头 <code>Retry-After</code>），服务端不做 argon2 哈希。</li>
+          <li>在途期间点「全部断开」或单行「断开」：浏览器侧请求已取消，但右侧名额表仍显示 5 个在途；约 4s 后核验在服务端跑完并结算，在途归零、窗口错误变 5 —— 断连没有提前归还名额。</li>
+          <li>5 个错误结算后再发起任何请求（即使密码正确）都会立即 429；等待 60 秒窗口滑过，名额自动恢复。</li>
+          <li>在途未满时用正确密码发起一个长延迟请求，同时并发几个错误请求：成功完成会清除「当时已完成」的错误，而之后才完成的在途错误仍会计数。</li>
+          <li>多次发起观察 <code>X-Served-By</code> 响应头 / 结果中的处理进程，请求在 <b>web1 / web2</b> 两个进程间轮询，名额状态全局一致。</li>
+          <li>重启容器（<code>docker compose restart</code>）：窗口内错误仍在，未完成占位被清空。</li>
+        </ol>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hhmmss = (t) => new Date(t * 1000).toLocaleTimeString("zh-CN", { hour12: false }) +
+  "." + String(new Date(t * 1000).getMilliseconds()).padStart(3, "0");
+
+async function api(path, opts = {}) {
+  const t0 = performance.now();
+  const resp = await fetch(path, opts);
+  const servedBy = resp.headers.get("X-Served-By") || "?";
+  let body = null;
+  try { body = await resp.json(); } catch (_) { /* no body */ }
+  return { status: resp.status, body, servedBy, ms: Math.round(performance.now() - t0),
+           retryAfter: resp.headers.get("Retry-After") };
+}
+
+/* ---------- 身份 ---------- */
+async function loadMe() {
+  const box = $("identity");
+  try {
+    const r = await api("/api/me");
+    if (r.status === 200) {
+      box.innerHTML = `<span class="pill ok">已登录</span>
+        <div style="margin-top:8px">账号：<b>${esc(r.body.username)}</b></div>
+        <div class="muted">会话到期：${hhmmss(r.body.expires_at)} · 进程 ${esc(r.body.served_by)}</div>`;
+    } else {
+      box.innerHTML = `<span class="pill warn">未登录</span><div class="muted" style="margin-top:8px">暂无有效会话</div>`;
+    }
+  } catch (e) {
+    box.innerHTML = `<span class="pill err">查询失败</span><div class="muted" style="margin-top:8px">${esc(e.message)}</div>`;
+  }
+}
+$("btn-me").onclick = loadMe;
+$("btn-logout").onclick = async () => {
+  await fetch("/api/logout", { method: "POST" });
+  loadMe(); loadStats();
+};
+
+/* ---------- 名额统计 ---------- */
+async function loadStats() {
+  try {
+    const r = await fetch("/api/stats");
+    const data = await r.json();
+    $("window-label").textContent = data.window_seconds;
+    $("max-delay").textContent = 10;
+    $("stats-body").innerHTML = data.accounts.map((a) => {
+      const full = a.remaining_slots === 0;
+      return `<tr>
+        <td><b>${esc(a.username)}</b></td>
+        <td>${a.window_errors}</td>
+        <td>${a.inflight}</td>
+        <td>${a.used_slots} / ${a.max_slots}
+          <div class="bar"><i style="width:${(a.used_slots / a.max_slots) * 100}%"></i></div></td>
+        <td><span class="pill ${full ? "err" : "ok"}">${a.remaining_slots} 个</span></td>
+      </tr>`;
+    }).join("");
+    $("poll-state").innerHTML = '<span class="dot live"></span>1s 自动刷新';
+  } catch (e) {
+    $("poll-state").innerHTML = '<span class="dot stale"></span>刷新失败，重试中';
+  }
+}
+setInterval(loadStats, 1000);
+
+/* ---------- 凭据快速填充 ---------- */
+document.querySelectorAll(".creds code").forEach((el) => {
+  el.onclick = () => {
+    $("login-user").value = el.dataset.u;
+    $("login-pass").value = el.dataset.p;
+  };
+});
+
+/* ---------- 单次登录 ---------- */
+$("btn-login").onclick = async () => {
+  const btn = $("btn-login"); btn.disabled = true;
+  const out = $("login-result"); out.hidden = false;
+  out.textContent = "请求中…";
+  const tWall = Date.now();
+  try {
+    const r = await api("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: $("login-user").value,
+        password: $("login-pass").value,
+        delay: parseFloat($("login-delay").value || "0"),
+      }),
+    });
+    const lines = [
+      `[${hhmmss(Date.now() / 1000)}] HTTP ${r.status} · 耗时 ${r.ms}ms · 进程 ${r.servedBy}`,
+      r.retryAfter ? `Retry-After: ${r.retryAfter}s` : "",
+      JSON.stringify(r.body, null, 2),
+    ].filter(Boolean);
+    out.textContent = lines.join("\n");
+    loadMe();
+  } catch (e) {
+    out.textContent = `本地请求异常：${e.message}`;
+  } finally {
+    btn.disabled = false;
+    loadStats();
+  }
+};
+
+/* ---------- 并发风暴 ---------- */
+const controllers = new Set();
+let reqSeq = 0;
+
+function rowHtml(seq) {
+  return `<div class="req-row" id="req-${seq}">
+    <span>${seq}</span>
+    <span class="state"><span class="pill run">在途</span></span>
+    <span class="timeline"></span>
+    <span class="dur">—</span>
+    <span class="proc">—</span>
+  </div>`;
+}
+function setRow(seq, patch) {
+  const el = $("req-" + seq);
+  if (!el) return;
+  if (patch.state) el.querySelector(".state").innerHTML = patch.state;
+  if (patch.timeline) el.querySelector(".timeline").innerHTML = patch.timeline;
+  if (patch.dur !== undefined) el.querySelector(".dur").textContent = patch.dur;
+  if (patch.proc !== undefined) el.querySelector(".proc").textContent = patch.proc;
+}
+
+$("btn-burst").onclick = async () => {
+  const n = Math.max(1, Math.min(20, parseInt($("burst-count").value, 10) || 1));
+  const delay = parseFloat($("burst-delay").value || "0");
+  const username = $("burst-user").value;
+  const password = $("burst-pass").value;
+  $("btn-burst").disabled = true; $("btn-abort-all").disabled = false;
+
+  const jobs = [];
+  for (let i = 0; i < n; i++) {
+    const seq = ++reqSeq;
+    const ctrl = new AbortController();
+    controllers.add(ctrl);
+    $("burst-list").insertAdjacentHTML("beforeend", rowHtml(seq));
+    const startWall = Date.now() / 1000;
+    setRow(seq, { timeline: `开始 ${hhmmss(startWall)} · 账号 ${esc(username)} · 延迟 ${delay}s` });
+
+    jobs.push((async () => {
+      const t0 = performance.now();
+      try {
+        const r = await api("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, delay }),
+          signal: ctrl.signal,
+        });
+        const ms = Math.round(performance.now() - t0);
+        const endWall = Date.now() / 1000;
+        if (r.status === 200) {
+          setRow(seq, {
+            state: '<span class="pill ok">200 成功</span>',
+            timeline: `${hhmmss(startWall)} → ${hhmmss(endWall)} 登录成功`,
+            dur: ms + "ms", proc: r.servedBy,
+          });
+        } else if (r.status === 429) {
+          setRow(seq, {
+            state: '<span class="pill err">429 限流</span>',
+            timeline: `${hhmmss(startWall)} → ${hhmmss(endWall)} 满额拒绝（未做哈希）` +
+              (r.retryAfter ? ` · Retry-After ${r.retryAfter}s` : ""),
+            dur: ms + "ms", proc: r.servedBy,
+          });
+        } else {
+          setRow(seq, {
+            state: '<span class="pill warn">401 错误</span>',
+            timeline: `${hhmmss(startWall)} → ${hhmmss(endWall)} 凭据错误，已计入窗口`,
+            dur: ms + "ms", proc: r.servedBy,
+          });
+        }
+      } catch (e) {
+        const ms = Math.round(performance.now() - t0);
+        if (ctrl.signal.aborted) {
+          setRow(seq, {
+            state: '<span class="pill violet">本地已断开</span>',
+            timeline: `开始 ${hhmmss(startWall)} · 浏览器已取消，服务端仍在核验并将结算，请看名额表`,
+            dur: ms + "ms", proc: "—",
+          });
+        } else {
+          setRow(seq, {
+            state: '<span class="pill err">异常</span>',
+            timeline: esc(e.message), dur: ms + "ms", proc: "—",
+          });
+        }
+      } finally {
+        controllers.delete(ctrl);
+        loadStats();
+      }
+    })());
+  }
+  await Promise.allSettled(jobs);
+  $("btn-burst").disabled = false;
+  if (controllers.size === 0) $("btn-abort-all").disabled = true;
+  loadMe();
+};
+
+$("btn-abort-all").onclick = () => {
+  controllers.forEach((c) => c.abort());
+  controllers.clear();
+  $("btn-abort-all").disabled = true;
+};
+$("btn-clear").onclick = () => {
+  $("burst-list").innerHTML =
+    '<div class="req-row head"><span>#</span><span>状态</span><span>时间线 / 结果</span><span>耗时</span><span>处理进程</span></div>';
+};
+
+loadMe();
+loadStats();
+</script>
+</body>
+</html>

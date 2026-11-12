@@ -1,0 +1,56 @@
+services:
+  web1:
+    build: .
+    image: login-guard:latest
+    environment:
+      LOGIN_DB_PATH: /data/login.db
+      PROCESS_NAME: web1
+      ERROR_WINDOW_SECONDS: "60"
+      MAX_SLOTS: "5"
+      MAX_DELAY_SECONDS: "10"
+    volumes:
+      - login-db:/data
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/stats', timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+
+  web2:
+    build: .
+    image: login-guard:latest
+    environment:
+      LOGIN_DB_PATH: /data/login.db
+      PROCESS_NAME: web2
+      ERROR_WINDOW_SECONDS: "60"
+      MAX_SLOTS: "5"
+      MAX_DELAY_SECONDS: "10"
+    volumes:
+      - login-db:/data
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/stats', timeout=5).status==200 else 1)"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      web1:
+        condition: service_healthy
+      web2:
+        condition: service_healthy
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  login-db:
